@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/fulfillment-service/internal/logging"
 	"github.com/osac-project/fulfillment-service/internal/network"
+	"github.com/osac-project/fulfillment-service/internal/servers"
 	shtdwn "github.com/osac-project/fulfillment-service/internal/shutdown"
 	"github.com/osac-project/fulfillment-service/internal/version"
 )
@@ -152,6 +154,12 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	gatewayMux := runtime.NewServeMux(
 		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.HTTPBodyMarshaler{
 			Marshaler: gatewayMarshaller,
+		}),
+		runtime.WithIncomingHeaderMatcher(func(key string) (string, bool) {
+			if strings.EqualFold(key, servers.DryRunHTTPHeader) {
+				return servers.DryRunMetadataKey, true
+			}
+			return runtime.DefaultHeaderMatcher(key)
 		}),
 	)
 
@@ -283,6 +291,7 @@ func (c *runnerContext) registerHandlers(ctx context.Context, mux *runtime.Serve
 		publicv1.RegisterClusterTemplatesHandler,
 		publicv1.RegisterClusterCatalogItemsHandler,
 		publicv1.RegisterClustersHandler,
+		publicv1.RegisterClusterVersionsHandler,
 		publicv1.RegisterHostTypesHandler,
 		publicv1.RegisterComputeInstanceTemplatesHandler,
 		publicv1.RegisterComputeInstanceCatalogItemsHandler,
@@ -312,6 +321,7 @@ func (c *runnerContext) registerHandlers(ctx context.Context, mux *runtime.Serve
 		privatev1.RegisterClusterTemplatesHandler,
 		privatev1.RegisterClusterCatalogItemsHandler,
 		privatev1.RegisterClustersHandler,
+		privatev1.RegisterClusterVersionsHandler,
 		privatev1.RegisterEventsHandler,
 		privatev1.RegisterHostTypesHandler,
 		privatev1.RegisterHubsHandler,
@@ -322,6 +332,7 @@ func (c *runnerContext) registerHandlers(ctx context.Context, mux *runtime.Serve
 		privatev1.RegisterBareMetalInstanceCatalogItemsHandler,
 		privatev1.RegisterBareMetalInstancesHandler,
 		privatev1.RegisterNetworkClassesHandler,
+		privatev1.RegisterSecretsHandler,
 		privatev1.RegisterStorageBackendsHandler,
 		privatev1.RegisterStorageTiersHandler,
 		privatev1.RegisterVirtualNetworksHandler,

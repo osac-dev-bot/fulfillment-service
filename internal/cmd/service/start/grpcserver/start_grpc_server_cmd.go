@@ -301,13 +301,20 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create validation interceptor: %w", err)
 	}
 
-	// Create metadata fetcher for project authorization
+	// Create metadata fetchers for project and project membership authorization.
 	metadataFetcher, err := dao.NewMetadataFetcher().
 		SetLogger(c.logger).
 		SetTable("projects").
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create metadata fetcher: %w", err)
+	}
+	pmMetadataFetcher, err := dao.NewMetadataFetcher().
+		SetLogger(c.logger).
+		SetTable("project_memberships").
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create project membership metadata fetcher: %w", err)
 	}
 
 	// Prepare the authentication interceptor:
@@ -360,6 +367,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetLogger(c.logger).
 		AddAnonymousMethodRegex(anonymousMethodsRegex).
 		SetMetadataFetcher(metadataFetcher).
+		SetProjectMembershipMetadataFetcher(pmMetadataFetcher).
 		AddEmergencyServiceAccounts(c.args.emergencyServiceAccounts...).
 		Build()
 	if err != nil {
@@ -993,6 +1001,34 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	privatev1.RegisterInstanceTypesServer(grpcServer, privateInstanceTypesServer)
 
+	// Create the cluster versions server:
+	c.logger.InfoContext(ctx, "Creating cluster versions server")
+	clusterVersionsServer, err := servers.NewClusterVersionsServer().
+		SetLogger(c.logger).
+		SetNotifier(notifier).
+		SetAttributionLogic(publicAttributionLogic).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create cluster versions server: %w", err)
+	}
+	publicv1.RegisterClusterVersionsServer(grpcServer, clusterVersionsServer)
+
+	// Create the private cluster versions server:
+	c.logger.InfoContext(ctx, "Creating private cluster versions server")
+	privateClusterVersionsServer, err := servers.NewPrivateClusterVersionsServer().
+		SetLogger(c.logger).
+		SetNotifier(notifier).
+		SetAttributionLogic(privateAttributionLogic).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private cluster versions server: %w", err)
+	}
+	privatev1.RegisterClusterVersionsServer(grpcServer, privateClusterVersionsServer)
+
 	// Create the private storage backends server:
 	c.logger.InfoContext(ctx, "Creating private storage backends server")
 	privateStorageBackendsServer, err := servers.NewPrivateStorageBackendsServer().
@@ -1006,6 +1042,20 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create private storage backends server: %w", err)
 	}
 	privatev1.RegisterStorageBackendsServer(grpcServer, privateStorageBackendsServer)
+
+	// Create the private secrets server:
+	c.logger.InfoContext(ctx, "Creating private secrets server")
+	privateSecretsServer, err := servers.NewPrivateSecretsServer().
+		SetLogger(c.logger).
+		SetNotifier(notifier).
+		SetAttributionLogic(privateAttributionLogic).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private secrets server: %w", err)
+	}
+	privatev1.RegisterSecretsServer(grpcServer, privateSecretsServer)
 
 	// Create the storage backends DAO for cross-resource validation in the storage tiers server:
 	storageBackendsDAO, err := dao.NewGenericDAO[*privatev1.StorageBackend]().
