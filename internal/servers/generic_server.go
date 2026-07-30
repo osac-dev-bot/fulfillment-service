@@ -557,7 +557,7 @@ func (s *GenericServer[O]) prepareForCreate(ctx context.Context, request any) (O
 		return nilObject, err
 	}
 
-	assignedTenant, err := s.determineAssignedTenant(ctx, requestObject, requestObject)
+	assignedTenant, err := s.determineAssignedTenant(ctx, requestObject, s.template.(O))
 	if err != nil {
 		return nilObject, err
 	}
@@ -1228,6 +1228,17 @@ func (s *GenericServer[O]) setCreator(ctx context.Context, object O, creator str
 // being created or updated. In case of error it returns a gRPC error that can be directly returned to the client.
 func (s *GenericServer[O]) determineAssignedTenant(ctx context.Context,
 	requestObject, currentObject O) (result string, err error) {
+	// Get the tenant from the request and current object. For updates where the tenant is not
+	// being changed, preserve the current tenant without checking assignability — the tenant was
+	// already validated at creation time, and requiring assignability here would reject callers
+	// whose JWT lacks a tenant claim even though they are not changing the tenant.
+	requestTenant := s.getTenant(requestObject)
+	currentTenant := s.getTenant(currentObject)
+	if currentTenant != "" && (requestTenant == "" || requestTenant == currentTenant) {
+		result = currentTenant
+		return
+	}
+
 	// Check that there are visible tenants:
 	visibleTenants, err := s.tenancyLogic.DetermineVisibleTenants(ctx)
 	if err != nil {
@@ -1275,10 +1286,6 @@ func (s *GenericServer[O]) determineAssignedTenant(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.PermissionDenied, "there is no default tenant")
 		return
 	}
-
-	// Get the tenant from the request and current object:
-	requestTenant := s.getTenant(requestObject)
-	currentTenant := s.getTenant(currentObject)
 
 	// If the request specifies a tenant, check that it is visible and assignable:
 	if requestTenant != "" {

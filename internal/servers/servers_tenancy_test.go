@@ -14,6 +14,8 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"fmt"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -414,6 +416,96 @@ var _ = Describe("Tenancy logic", func() {
 		object := createResponse.GetObject()
 
 		updateResponse, err := clustersServer.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Id: object.GetId(),
+				Spec: publicv1.ClusterSpec_builder{
+					NodeSets: map[string]*publicv1.ClusterNodeSet{
+						"compute": publicv1.ClusterNodeSet_builder{
+							HostType: "acme_1tib",
+							Size:     4,
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updateResponse.GetObject().GetMetadata().GetTenant()).To(Equal("my-tenant"))
+	})
+
+	It("Succeeds updating when caller has no assignable tenants but tenant is unchanged", func() {
+		// Use a tenancy logic with assignable tenants for the Create phase:
+		createTenancy := auth.NewMockTenancyLogic(ctrl)
+		createTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+			Return(collections.NewSet("my-tenant"), nil).
+			AnyTimes()
+		createTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+			Return("my-tenant", nil).
+			AnyTimes()
+		createTenancy.EXPECT().DetermineVisibleTenants(gomock.Any()).
+			Return(collections.NewSet("my-tenant"), nil).
+			AnyTimes()
+
+		templatesDao, err := dao.NewGenericDAO[*privatev1.ClusterTemplate]().
+			SetLogger(logger).
+			SetTenancyLogic(createTenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = templatesDao.Create().
+			SetObject(privatev1.ClusterTemplate_builder{
+				Id:          "my-template",
+				Title:       "My template",
+				Description: "My template",
+				Metadata: privatev1.Metadata_builder{
+					Tenant: "my-tenant",
+				}.Build(),
+			}.Build()).
+			Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		createServer, err := NewClustersServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(createTenancy).
+			SetScheme(testScheme).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		createResponse, err := createServer.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Spec: publicv1.ClusterSpec_builder{
+					Template: "my-template",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		object := createResponse.GetObject()
+
+		// Now use a tenancy logic where DetermineAssignableTenants returns an error
+		// (simulating a caller whose JWT has no tenant claim):
+		updateTenancy := auth.NewMockTenancyLogic(ctrl)
+		updateTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+			Return(
+				collections.Set[string]{},
+				fmt.Errorf("subject must belong to at least one tenant to create objects"),
+			).
+			AnyTimes()
+		updateTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+			Return("", fmt.Errorf("subject must belong to at least one tenant to create objects")).
+			AnyTimes()
+		updateTenancy.EXPECT().DetermineVisibleTenants(gomock.Any()).
+			Return(collections.NewSet("my-tenant"), nil).
+			AnyTimes()
+
+		updateServer, err := NewClustersServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(updateTenancy).
+			SetScheme(testScheme).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		// Update without changing the tenant — should succeed:
+		updateResponse, err := updateServer.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
 				Spec: publicv1.ClusterSpec_builder{
